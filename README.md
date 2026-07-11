@@ -92,15 +92,40 @@ To enforce **Exactly-Once Processing**:
 * **Ingest Rate Limiting / Locking**: API Gateway uses atomic Lua scripts in Redis to enforce Token-Bucket rules. The Saga orchestrator locks the `idempotency_key` in Redis, preventing concurrent duplicate requests from executing simultaneously.
 * **Inbox Pattern**: The `ledger-service` maintains an `inbox_messages` table. When an event is consumed from Kafka, the consumer attempts to insert the event signature. A unique constraint violation causes duplicate messages to be discarded silently, ensuring ledger records are never duplicated.
 
-### 4. High-Throughput Concurrency (Java 21 Virtual Threads)
-Traditional servlet containers map one incoming request to one OS thread (thread-per-request). Under high load, OS thread context-switching overhead, kernel transitions, and memory footprints degrade capacity.
+### 4. High-Throughput Concurrency (Java 21 Virtual Threads vs. Go Goroutines)
+PayCore employs two distinct concurrency runtime architectures:
+* **Java 21 Virtual Threads (Loom)**: Traditional Java threads map 1-to-1 to kernel OS threads, consuming ~1MB of memory and requiring costly kernel context switches. PayCore’s Spring Boot 3 runtime uses Virtual Threads, which map $N$ virtual threads to $M$ OS carrier threads (using a ForkJoinPool scheduler). When a thread executes a blocking database IO operation, it yields its carrier thread, reducing context-switch CPU cycles to virtually zero and dropping memory overhead to &lt;2KB per thread.
+* **Go Goroutines**: Go uses a work-stealing scheduler (`G-M-P` model) to run goroutines on logical processors. Webhook workers and fraud checks execute on these lightweight green threads. Go dynamically grows goroutine stacks (starting at 2KB), allowing PayCore to orchestrate thousands of concurrent HTTP webhook dispatch checks on a single Go node.
 
-PayCore configures **Java 21 Virtual Threads**:
-* Virtual threads are lightweight user-mode threads managed by the JVM rather than the OS kernel.
-* When a virtual thread makes a blocking call (e.g., waiting for PostgreSQL or calling a downstream gRPC endpoint), it is dismounted from its underlying carrier OS thread. The JVM reassigns the carrier thread to another task.
-* This allows PayCore to handle 10,000+ concurrent connections without blocking CPU cores, maximizing IO utilization.
+### 5. Concurrency Controls & Lock-Free Data Structures
+To maximize throughput, the platform avoids synchronized blocks that create kernel locks:
+* **Compare-And-Swap (CAS)**: Used in counters and balance checks to update registers. CAS compares the current memory content with a given value, and only updates it if they match. This prevents CPU-level context switching.
+* **ConcurrentHashMap**: Java cache stores utilize segment-based lock striping, allowing multiple threads to write to separate hash buckets concurrently without blocking the entire data structure.
+* **Atomic Operations in Go**: The Go Analytics service tracks counters and revenue metrics using `sync/atomic`, executing lock-free additions directly via CPU assembly instructions.
+
+### 6. Pessimistic vs. Optimistic Locking in Ledgers
+To balance performance against financial ledger accuracy, PayCore segregates locking strategies:
+* **Optimistic Locking**: The `accounts` table uses version-based optimistic locking (`@Version`). On update, it executes `WHERE version = :currentVersion`. If another request modified the balance in the interim, the transaction fails with an optimistic locking error, triggering a clean retry. This is optimal for merchant accounts with moderate transaction frequencies.
+* **Pessimistic Locking**: For ledger settlements and payouts, PayCore acquires exclusive row-level locks (`SELECT ... FOR UPDATE`). This blocks other transactions from modifying the record until the settlement completes, preventing **Double-Spending** attacks.
+
+### 7. Kafka Message Ordering & Partitioning
+Kafka ensures high throughput by distributing messages across multiple partitions. However, random distribution destroys transaction order (e.g., processing a `Captured` event before an `Initiated` event).
+* **Key-Based Partitioning**: PayCore publishes events using the `payment_id` as the message key. Kafka hashes the key and maps it to a specific partition:
+  $$\text{Partition} = \text{Hash}(\text{Key}) \pmod{\text{Number of Partitions}}$$
+* This guarantees that all lifecycle events for a specific transaction are routed to the **same partition** and consumed in strict **FIFO order** by consumer groups.
+
+### 8. PCI-DSS inspired Tokenization & API Key Security
+Financial software must adhere to strict PCI-DSS security compliance limits:
+* **Tokenization Scope**: The API Gateway and core payment services never handle or store raw cardholder data (PAN, CVV). Raw details are exchanged directly for single-use string tokens (e.g., `tok_visa_success`) at the Authorization Service boundary. This restricts the cardholder data environment (CDE) to a single service, reducing audit scope.
+* **Hashed API Keys**: PayCore generates cryptographically secure API keys (`sk_live_...`). To prevent database leaks from exposing keys, we store only the SHA-256 hash of the keys. When a merchant authenticates, we hash the provided key and query PostgreSQL for a match.
+
+### 9. Cascading Failures & Resilience (Circuit Breakers & Bulkheads)
+In a highly distributed environment, one slow microservice can consume resources across the cluster, causing a cascading failure:
+* **Circuit Breakers**: When gRPC calls to the Ledger or Authorization Service fail repeatedly, the circuit breaker trips from `CLOSED` to `OPEN`. Subsequent calls fail fast immediately, shielding the failing service and preserving thread resources in the calling service.
+* **Bulkhead Isolation**: Isolates thread resources. Webhook worker pools and payment Saga orchestrators run in dedicated thread groups. If webhook delivery targets are slow and consume all webhook pool resources, payment processing saga threads remain unimpacted.
 
 ---
+
 
 ## Verification & Test Suite Use Cases
 
