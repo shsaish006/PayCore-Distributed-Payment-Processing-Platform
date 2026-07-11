@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package paycore.ledger.v1;
+
+option java_multiple_files = true;
+option java_package = "com.paycore.ledger.grpc";
+option go_package = "github.com/paycore/shared/proto/ledger;ledgerv1";
+
+service LedgerService {
+  rpc RecordTransaction(RecordTransactionRequest) returns (RecordTransactionResponse);
+  rpc GetAccountBalance(GetAccountBalanceRequest) returns (GetAccountBalanceResponse);
+}
+
+message RecordTransactionRequest {
+  string merchant_id = 1;
+  string transaction_id = 2;
+  double amount = 3;
+  string currency = 4;
+  string description = 5;
+  string type = 6; -- "PAYMENT", "REFUND", "SETTLEMENT", "CHARGEBACK"
+}
+
+message RecordTransactionResponse {
+  string transaction_id = 1;
+  string entry_id = 2;
+  bool success = 3;
+  string error_message = 4;
+}
+
+message GetAccountBalanceRequest {
+  string merchant_id = 1;
+  string account_type = 2; -- "ASSET", "LIABILITY", "REVENUE", "EXPENSE"
+  string currency = 3;
+}
+
+message GetAccountBalanceResponse {
+  string merchant_id = 1;
+  string account_type = 2;
+  double balance = 3;
+  string currency = 4;
+}

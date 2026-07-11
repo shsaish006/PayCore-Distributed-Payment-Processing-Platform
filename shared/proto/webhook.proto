@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package paycore.webhook.v1;
+
+option java_multiple_files = true;
+option java_package = "com.paycore.webhook.grpc";
+option go_package = "github.com/paycore/shared/proto/webhook;webhookv1";
+
+service WebhookService {
+  rpc QueueWebhook(QueueWebhookRequest) returns (QueueWebhookResponse);
+}
+
+message QueueWebhookRequest {
+  string merchant_id = 1;
+  string event_type = 2; -- "payment.authorized", "payment.captured", "payment.refunded", etc.
+  string payload = 3; -- JSON serialized webhook body
+  string idempotency_key = 4;
+}
+
+message QueueWebhookResponse {
+  string task_id = 1;
+  bool queued = 2;
+  string error_message = 3;
+}

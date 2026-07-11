@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package paycore.auth.v1;
+
+option java_multiple_files = true;
+option java_package = "com.paycore.auth.grpc";
+option go_package = "github.com/paycore/shared/proto/auth;authv1";
+
+service AuthService {
+  rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc GenerateToken(GenerateTokenRequest) returns (GenerateTokenResponse);
+}
+
+message ValidateAPIKeyRequest {
+  string api_key = 1;
+}
+
+message ValidateAPIKeyResponse {
+  bool is_valid = 1;
+  string merchant_id = 2;
+  string scope = 3;
+}
+
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  bool is_valid = 1;
+  string merchant_id = 2;
+  string role = 3;
+  repeated string permissions = 4;
+}
+
+message GenerateTokenRequest {
+  string client_id = 1;
+  string client_secret = 2;
+}
+
+message GenerateTokenResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+}

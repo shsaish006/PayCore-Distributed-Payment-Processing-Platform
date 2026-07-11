@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package paycore.fraud.v1;
+
+option java_multiple_files = true;
+option java_package = "com.paycore.fraud.grpc";
+option go_package = "github.com/paycore/shared/proto/fraud;fraudv1";
+
+service FraudDetectionService {
+  rpc AnalyzeTransaction(AnalyzeTransactionRequest) returns (AnalyzeTransactionResponse);
+}
+
+message AnalyzeTransactionRequest {
+  string transaction_id = 1;
+  string merchant_id = 2;
+  double amount = 3;
+  string currency = 4;
+  string card_fingerprint = 5;
+  string device_fingerprint = 6;
+  string ip_address = 7;
+  string billing_country = 8;
+}
+
+message AnalyzeTransactionResponse {
+  string transaction_id = 1;
+  bool is_flagged = 2;
+  double score = 3; -- 0.0 to 1.0 risk score
+  string recommendation = 4; -- "APPROVE", "REVIEW", "REJECT"
+  repeated string reasons = 5; -- e.g., "VELOCITY_EXCEEDED", "COUNTRY_BLACKLISTED", "IP_REPUTATION_LOW"
+}

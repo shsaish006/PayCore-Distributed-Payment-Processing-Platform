@@ -1,0 +1,259 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: paycore
+
+---
+# Shared Configuration Maps for microservices connections
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: paycore-config
+  namespace: paycore
+data:
+  REDIS_HOST: "paycore-redis-svc.paycore.svc.cluster.local"
+  REDIS_PORT: "6379"
+  KAFKA_BOOTSTRAP_SERVERS: "paycore-kafka-svc.paycore.svc.cluster.local:9092"
+  JAEGER_OTLP_ENDPOINT: "http://jaeger-collector.paycore.svc.cluster.local:4317"
+
+---
+# API Gateway Services (Public LoadBalancer Entrypoint)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: paycore
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: paycore/api-gateway:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: paycore-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-svc
+  namespace: paycore
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 8000
+  selector:
+    app: api-gateway
+
+---
+# Payment Service (Spring Boot 3 + Virtual Threads Engine)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: paycore
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+        - name: payment-service
+          image: paycore/payment-service:latest
+          ports:
+            - containerPort: 8081
+            - containerPort: 50051
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://paycore-postgres-svc.paycore.svc.cluster.local:5432/paycore_payment"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: "postgres"
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: "password"
+          envFrom:
+            - configMapRef:
+                name: paycore-config
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service-svc
+  namespace: paycore
+spec:
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+  selector:
+    app: payment-service
+
+---
+# Ledger Service (Spring Boot 3 + Double-Entry bookkeeping)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-service
+  namespace: paycore
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-service
+  template:
+    metadata:
+      labels:
+        app: ledger-service
+    spec:
+      containers:
+        - name: ledger-service
+          image: paycore/ledger-service:latest
+          ports:
+            - containerPort: 8083
+            - containerPort: 50053
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://paycore-postgres-svc.paycore.svc.cluster.local:5432/paycore_ledger"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: "postgres"
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: "password"
+          envFrom:
+            - configMapRef:
+                name: paycore-config
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-service-svc
+  namespace: paycore
+spec:
+  ports:
+    - name: http
+      port: 8083
+      targetPort: 8083
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+  selector:
+    app: ledger-service
+
+---
+# Webhook Service (Go worker pool)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-service
+  namespace: paycore
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webhook-service
+  template:
+    metadata:
+      labels:
+        app: webhook-service
+    spec:
+      containers:
+        - name: webhook-service
+          image: paycore/webhook-service:latest
+          ports:
+            - containerPort: 50055
+          env:
+            - name: POSTGRES_URL
+              value: "postgresql://postgres:password@paycore-postgres-svc.paycore.svc.cluster.local:5432/paycore_webhook?sslmode=disable"
+          envFrom:
+            - configMapRef:
+                name: paycore-config
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-service-svc
+  namespace: paycore
+spec:
+  ports:
+    - port: 50055
+      targetPort: 50055
+  selector:
+    app: webhook-service
+
+---
+# Autoscaling rules (Horizontal Pod Autoscaler)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-service-hpa
+  namespace: paycore
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-service
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

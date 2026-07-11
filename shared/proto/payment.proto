@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package paycore.payment.v1;
+
+option java_multiple_files = true;
+option java_package = "com.paycore.payment.grpc";
+option go_package = "github.com/paycore/shared/proto/payment;paymentv1";
+
+service PaymentService {
+  rpc CreatePayment(CreatePaymentRequest) returns (PaymentResponse);
+  rpc GetPayment(GetPaymentRequest) returns (PaymentResponse);
+  rpc AuthorizePayment(AuthorizePaymentRequest) returns (PaymentResponse);
+  rpc CapturePayment(CapturePaymentRequest) returns (PaymentResponse);
+  rpc RefundPayment(RefundPaymentRequest) returns (PaymentResponse);
+  rpc CancelPayment(CancelPaymentRequest) returns (PaymentResponse);
+}
+
+message CreatePaymentRequest {
+  string merchant_id = 1;
+  double amount = 2;
+  string currency = 3;
+  string payment_method = 4; -- "card", "bank_transfer", etc.
+  string idempotency_key = 5;
+  string card_token = 6;
+  string description = 7;
+}
+
+message GetPaymentRequest {
+  string payment_id = 1;
+}
+
+message AuthorizePaymentRequest {
+  string payment_id = 1;
+  string merchant_id = 2;
+  double amount = 3;
+  string card_token = 4;
+}
+
+message CapturePaymentRequest {
+  string payment_id = 1;
+  double amount = 2; -- Supports Partial Capture
+  string idempotency_key = 3;
+}
+
+message RefundPaymentRequest {
+  string payment_id = 1;
+  double amount = 2; -- Supports Partial Refund
+  string reason = 3;
+  string idempotency_key = 4;
+}
+
+message CancelPaymentRequest {
+  string payment_id = 1;
+  string reason = 2;
+}
+
+message PaymentResponse {
+  string id = 1;
+  string merchant_id = 2;
+  double amount = 3;
+  double amount_captured = 4;
+  double amount_refunded = 5;
+  string currency = 6;
+  string status = 7; -- CREATED, AUTHORIZED, CAPTURED, REFUNDED, CANCELLED, FAILED
+  string idempotency_key = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string error_message = 11;
+  string gateway_reference = 12;
+}
